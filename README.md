@@ -9,7 +9,7 @@ I've added ktl as a submodule.
 This should build against WDK 10.0.22621.0 and later. I'm less sure about earlier versions.
 
 # installing & running
-I advise against running this on your dev machine. It's kernel code of the POC variety. Here's what I do:
+Do not run this on your dev machine. It's kernel code of the POC variety. Here's what I do:
 
 1. Copy all binaries to a test VM with [tes signing enabled](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option).
 2. Run `fltmc load aamini`. This will set up the necessary minifilter registry values etc (thanks @zodiacon)
@@ -26,6 +26,5 @@ Copy Notification (pos=0, len=1000000)
 ```
 
 # testing
-So far, I've only played with this on Windows 11, since copy notifications are only supported in Win11 22000+
-I run it with Driver Verifier enabled, but that doesn't mean there are no bugs.
+So far, I've only played with this on Windows 11, since copy notifications are only supported in Win11 22000+. I run with Driver Verifier standard settings enabled, but that doesn't mean there are no bugs.
 
