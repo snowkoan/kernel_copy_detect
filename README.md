@@ -11,8 +11,9 @@ Originally forked from @zoadiacon: https://github.com/zodiacon/windowskernelprog
 Do not run this on your dev machine. It's kernel code of the POC variety. Here's what I do:
 
 1. Copy all binaries to a test VM with [tes signing enabled](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option).
-2. Run `fltmc load aamini`. This will set up the necessary minifilter registry values etc (thanks @zodiacon)
-3. Run `aaminiexe.exe` to see messages from the driver.
+2. First time service creation: `sc create copydetect type= kernel binPath="%cd%\aamini.sys" start= demand`
+3. Run `fltmc load copydetect`. This will set up the necessary minifilter registry values etc (thanks @zodiacon)
+4. Run `aaminiexe.exe` to see messages from the driver.
 
 ex:
 
