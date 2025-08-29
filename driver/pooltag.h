@@ -1,0 +1,7 @@
+#pragma once
+
+#define COMMUNINCATION_POOLTAG 'mcAA'
+#define VOLUME_POOLTAG 'mvAA'
+#define FILE_POOLTAG 'ifAA'
+#define STREAMHANDLE_POOLTAG 'hsAA'
+#define STREAM_POOLTAG 'tsAA'
