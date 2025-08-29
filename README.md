@@ -5,7 +5,7 @@ Originally forked from @zoadiacon: https://github.com/zodiacon/windowskernelprog
 
 # building
 1. This should build against WDK 10.0.22621.0 and later. I'm less sure about earlier versions.
-2. ktl is a submodule so you will have problems if you don't initialize it somehow. The easiest way is likely: `git clone https://github.com/snowkoan/kernel_copy_detect.git --recurse-submodules`
+2. [ktl](https://github.com/snowkoan/ktl) is a submodule so you will have problems if you don't initialize it somehow. The easiest way is likely: `git clone https://github.com/snowkoan/kernel_copy_detect.git --recurse-submodules`
 
 # installing & running
 Do not run this on your dev machine. It's kernel code of the POC variety. Here's what I do:
