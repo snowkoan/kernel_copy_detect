@@ -11,7 +11,7 @@ This should build against WDK 10.0.22621.0 and later. I'm less sure about earlie
 # installing & running
 I advise against running this on your dev machine. It's kernel code of the POC variety. Here's what I do:
 
-1. Copy all binaries to a test VM
+1. Copy all binaries to a test VM with [tes signing enabled](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option).
 2. Run `fltmc load aamini`. This will set up the necessary minifilter registry values etc (thanks @zodiacon)
 3. Run `aaminiexe.exe` to see messages from the driver.
 
