@@ -12,6 +12,6 @@ struct PortMessage {
     UCHAR data[1]; // Variable length data follows
 };
 
-#define FILTER_PORT_NAME L"\\BackupPort"
+#define FILTER_PORT_NAME L"\\CopyDetectPort"
 
-constexpr ULONG COMMUNICATION_BUFFER_LEN = 1 << 12; // 4 KB
+constexpr ULONG COMMUNICATION_BUFFER_LEN = 1 << 15; // 32 KB

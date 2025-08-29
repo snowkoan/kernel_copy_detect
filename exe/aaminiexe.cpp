@@ -36,9 +36,10 @@ int main()
 	auto hr = FilterConnectCommunicationPort(FILTER_PORT_NAME, 0, nullptr, 0, nullptr, &hPort);
 	if (FAILED(hr)) 
 	{
-		printf("Error connecting to port (HR=0x%08X)\n", hr);
+		wprintf(L"Error connecting to port (HR=0x%08X)\n", hr);
 		return 1;
 	}
+    wprintf(L"Connected to port %ls. Waiting for messages.\n", FILTER_PORT_NAME);
 
 	BYTE buffer[COMMUNICATION_BUFFER_LEN];	// 4 KB
 	auto message = (FILTER_MESSAGE_HEADER*)buffer;
@@ -48,7 +49,7 @@ int main()
 
 		if (FAILED(hr)) 
 		{
-			printf("Error receiving message (0x%08X)\n", hr);
+			wprintf(L"Error receiving message (0x%08X)\n", hr);
 			break;
 		}
 
