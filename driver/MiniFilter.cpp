@@ -214,17 +214,13 @@ FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 			p.GetImageFileNameOnly(processName);
 
 			// This is always SYSTEM it seems.
-			SendOutputMessage(PortMessageType::FileMessage, L"%wZ (%u): Copy Notification (pos=%u, len=%u)\n\tDestination: %wZ (SH=%p)",
-				&processName, HandleToULong(PsGetCurrentProcessId()), Parameters.ByteOffset, Parameters.Length, &name->Name, context);
-
-			if (sourceName)
-			{
-				SendOutputMessage(PortMessageType::FileMessage, L"\tSource: %wZ", &sourceName.Get()->Name);
-			}
-			else
-			{
-				SendOutputMessage(PortMessageType::FileMessage, L"\tSource: %p", copyInfo.SourceFileObject);
-			}
+			SendOutputMessage(PortMessageType::FileMessage, 
+				L"%wZ (%u): Copy Notification (pos=%u, len=%u)\n\tDestination: %wZ (SH=%p)\n\tSource: %wZ",
+				&processName, HandleToULong(PsGetCurrentProcessId()), 
+				Parameters.ByteOffset, Parameters.Length, 
+				&name->Name, 
+				context,
+				sourceName ? &sourceName.Get()->Name : Process::GetUnknownProcessName());
 		}
 
 		Locker locker(context->Lock);
