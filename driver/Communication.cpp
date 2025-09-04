@@ -3,11 +3,7 @@
 #include "Communication.h"
 #include "pooltag.h"
 
-static PFLT_PORT s_Port = nullptr;
-static PFLT_PORT s_ClientPort = nullptr;
-static PFLT_FILTER s_Filter = nullptr;
-
-NTSTATUS InitFilterPort(
+NTSTATUS CommunicationPort::InitFilterPort(
     _In_ PFLT_FILTER Filter)
 {
 	NTSTATUS status = STATUS_INTERNAL_ERROR;
@@ -27,7 +23,7 @@ NTSTATUS InitFilterPort(
 		InitializeObjectAttributes(&attr, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, nullptr, sd);
 
 		status = FltCreateCommunicationPort(Filter, 
-			&s_Port, 
+			&Instance()->m_Port, 
 			&attr, 
 			nullptr,
 			PortConnectNotify, 
@@ -42,28 +38,28 @@ NTSTATUS InitFilterPort(
 			break;
 		}
 
-		s_Filter = Filter;
+		Instance()->m_Filter = Filter;
 
     } while (false);
     
 	return status;
 }
 
-void FinalizeFilterPort()
+void CommunicationPort::FinalizeFilterPort()
 {
-	if (s_Port)
+	if (m_Port)
 	{
-		FltCloseCommunicationPort(s_Port);
-        s_Port = nullptr;
+		FltCloseCommunicationPort(m_Port);
+        m_Port = nullptr;
 	}
 }
 
 // Rudimentary output message sender.
-NTSTATUS SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString, ...)
+NTSTATUS CommunicationPort::SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString, ...)
 {
 	NTSTATUS status = STATUS_INTERNAL_ERROR;
 
-	if (s_ClientPort)
+	if (m_ClientPort)
 	{
 		va_list args;
 		va_start(args, formatString);
@@ -84,8 +80,8 @@ NTSTATUS SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString,
 
 				// LARGE_INTEGER timeout;
 				// timeout.QuadPart = -10000 * 100; // 100 msec
-				status = FltSendMessage(s_Filter,
-					&s_ClientPort,
+				status = FltSendMessage(m_Filter,
+					&m_ClientPort,
 					msg,
 					msg->dataLenBytes + FIELD_OFFSET(PortMessage, data),
 					nullptr,
@@ -104,7 +100,7 @@ NTSTATUS SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString,
 	return status;
 }
 
-NTSTATUS PortConnectNotify(
+NTSTATUS CommunicationPort::PortConnectNotify(
 	_In_ PFLT_PORT ClientPort,
 	_In_opt_ PVOID ServerPortCookie,
 	_In_reads_bytes_opt_(SizeOfContext) PVOID ConnectionContext,
@@ -116,19 +112,23 @@ NTSTATUS PortConnectNotify(
 	UNREFERENCED_PARAMETER(SizeOfContext);
 	
 	ConnectionPortCookie = nullptr;
-	s_ClientPort = ClientPort;
+	Instance()->m_ClientPort = ClientPort;
+    Instance()->m_ConnectedProcess = PsGetCurrentProcess();
+    Instance()->m_ConnectedPID = HandleToUlong(PsGetCurrentProcessId());
 
 	return STATUS_SUCCESS;
 }
 
-void PortDisconnectNotify(_In_opt_ PVOID ConnectionCookie) {
+void CommunicationPort::PortDisconnectNotify(_In_opt_ PVOID ConnectionCookie) {
 	UNREFERENCED_PARAMETER(ConnectionCookie);
 
-	FltCloseClientPort(s_Filter, &s_ClientPort);
-	s_ClientPort = nullptr;
+	FltCloseClientPort(Instance()->m_Filter, &Instance()->m_ClientPort);
+	Instance()->m_ClientPort = {};
+	Instance()->m_ConnectedPID = {};
+	Instance()->m_ConnectedProcess = {};
 }
 
-NTSTATUS PortMessageNotify(
+NTSTATUS CommunicationPort::PortMessageNotify(
 	_In_opt_ PVOID PortCookie,
 	_In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
 	_In_ ULONG InputBufferLength,

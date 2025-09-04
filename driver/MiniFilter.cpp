@@ -85,6 +85,12 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 		return FLT_POSTOP_FINISHED_PROCESSING;
 	}
 
+	if (HandleToUlong(PsGetCurrentProcessId()) == CommunicationPort::Instance()->GetConnectedPID())
+    {
+        // Don't care about our own activity
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+
 	//
 	// Ignore attribute opens to save a *lot* of useless processing.
 	//
@@ -145,16 +151,11 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 		Process p(PsGetCurrentProcess());
 		p.GetImageFileNameOnly(processName);
 
-		SendOutputMessage(PortMessageType::FileMessage,L"%wZ (%u): Created SH context 0x%p for %wZ", 
-			processName.Get(), HandleToUlong(PsGetCurrentProcessId()), context, &fileNameInfo->Name);
-		if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject))
-		{
-			SendOutputMessage(PortMessageType::FileMessage, L"\tOpened with copy destination flag");
-		}
-		if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject))
-		{
-			SendOutputMessage(PortMessageType::FileMessage, L"\tOpened with copy source flag");
-		}
+		CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
+			L"%wZ (%u): Created SH context 0x%p for %wZ%ls%ls", 
+			processName.Get(), HandleToUlong(PsGetCurrentProcessId()), context, &fileNameInfo->Name,
+			DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject) ? L"\n\tOpened with copy destination flag" : L"",
+			DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject) ? L"\n\tOpened with copy source flag" : L"");
 	}
 
 	//
@@ -173,67 +174,87 @@ FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 	const auto& Parameters = Data->Iopb->Parameters.Write;
 	CompletionContext = nullptr;
 
+	StreamHandleContext* contextSrc = {};
+	StreamHandleContext* contextDest = {};
+	VolumeContext* VolumeContext = {};
+
 	if (IoGetTopLevelIrp() != nullptr)
 	{
 		return FLT_PREOP_SUCCESS_NO_CALLBACK;
 	}
 
-	//
-	// This may not exist
-	//
-	StreamHandleContext* context;
-
-	auto status = FltGetStreamHandleContext(FltObjects->Instance,
-		FltObjects->FileObject,
-		(PFLT_CONTEXT*)&context);
-
-	if (!NT_SUCCESS(status) || context == nullptr) {
-		//
-		// no context, continue normally
-		//
-		return FLT_PREOP_SUCCESS_NO_CALLBACK;	
-	}
-
 	do {
 
-		FilterFileNameInformation name(Data);
-		if (!name)
-		{
+		//
+		// This may not exist
+		//
+		auto status = FltGetStreamHandleContext(FltObjects->Instance,
+			FltObjects->FileObject,
+			(PFLT_CONTEXT*)&contextSrc);
+
+		if (!NT_SUCCESS(status) || contextSrc == nullptr) {
+			//
+			// no context, that's normal.
+			//
 			break;
 		}
 
 		COPY_INFORMATION copyInfo = {};
 		status = DynamicImports::Instance()->FltGetCopyInformationFromCallbackData(Data, &copyInfo);
 		if (NT_SUCCESS(status))
-		{
-			// TODO: We should be able to figure out the instance for the source without that much trouble.
-			FilterFileNameInformation sourceName (nullptr, copyInfo.SourceFileObject);
+		{	
+			status = VolumeContext::GetVolumeContextFromFileObject(FltObjects->Filter, copyInfo.SourceFileObject, &VolumeContext);
+			if (!NT_SUCCESS(status))
+			{
+				// That's weird... we should have a context for this file.
+				break;
+			}
+
+			FilterFileNameInformation destinationName(Data);
+			if (!destinationName)
+			{
+				break;
+			}
+
+			FilterFileNameInformation sourceName (VolumeContext->fltInstance, copyInfo.SourceFileObject);
 
 			UnicodeString processName;
 			Process p(PsGetCurrentProcess());
 			p.GetImageFileNameOnly(processName);
 
 			// This is always SYSTEM it seems.
-			SendOutputMessage(PortMessageType::FileMessage, 
+			CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage, 
 				L"%wZ (%u): Copy Notification (pos=%u, len=%u)\n\tDestination: %wZ (SH=%p)\n\tSource: %wZ",
 				&processName, HandleToULong(PsGetCurrentProcessId()), 
 				Parameters.ByteOffset, Parameters.Length, 
-				&name->Name, 
-				context,
+				&destinationName->Name, 
+				contextSrc,
 				sourceName ? &sourceName.Get()->Name : Process::GetUnknownProcessName());
+
+			Locker locker(contextSrc->Lock);
+			contextSrc->m_writeCount++;
+
+			if (contextSrc->m_writeCount == 1)
+			{
+				// First write
+				KeQuerySystemTimePrecise(&contextSrc->m_firstWriteTime);				
+			}
 		}
 
-		Locker locker(context->Lock);
-		context->m_writeCount++;
-
-		if (context->m_writeCount == 1)
-		{
-			// First write
-			KeQuerySystemTimePrecise(&context->m_firstWriteTime);
-		}
 	} while (false);
 
-	FltReleaseContext(context);
+	if (contextSrc)
+	{
+		FltReleaseContext(contextSrc);
+	}
+	if (contextDest)
+	{
+		FltReleaseContext(contextDest);
+	}
+	if (VolumeContext)
+	{
+        FltReleaseContext(VolumeContext);
+	}
 
 	//
 	// don't prevent the write regardless
@@ -411,7 +432,7 @@ NTSTATUS MinifilterUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
 	UNREFERENCED_PARAMETER(Flags);
 
-	FinalizeFilterPort();
+	CommunicationPort::Instance()->FinalizeFilterPort();
 	FltUnregisterFilter(g_Filter);
 
 	return STATUS_SUCCESS;

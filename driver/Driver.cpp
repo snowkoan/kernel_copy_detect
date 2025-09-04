@@ -24,7 +24,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 		//
 		// Set up our filter communication port
 		//
-        if (!NT_SUCCESS(InitFilterPort(g_Filter))) 
+        if (!NT_SUCCESS(CommunicationPort::Instance()->InitFilterPort(g_Filter))) 
 		{
             KdPrint((DRIVER_PREFIX "Failed to initialize filter port (0x%X)\n", status));
             break;
