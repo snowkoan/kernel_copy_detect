@@ -152,6 +152,7 @@
     <ClInclude Include="DynamicImports.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="pooltag.h" />
+    <ClInclude Include="SectionContext.h" />
     <ClInclude Include="StreamContext.h" />
     <ClInclude Include="StreamHandleContext.h" />
     <ClInclude Include="VolumeContext.h" />

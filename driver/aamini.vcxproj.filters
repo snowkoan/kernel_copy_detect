@@ -63,5 +63,8 @@
     <ClInclude Include="DynamicImports.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SectionContext.h">
+      <Filter>Header Files\Contexts</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -33,8 +33,16 @@ public:
 		_Out_ PULONG ReturnOutputBufferLength);
 
 	NTSTATUS SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString, ...);
+	NTSTATUS SendSectionMessage(_In_ HANDLE Sectionhandle, _In_ ULONG FileSizeBytes);
 
     ULONG GetConnectedPID() const { return m_ConnectedPID; }
+
+	// Caller needs to call ZwClose() on this handle
+	NTSTATUS GetConnectedProcessHandle(HANDLE& hProcess) const;
+	// Caller needs to call ObDereferenceObject on object
+    NTSTATUS GetConnectedProcessObject(PEPROCESS& process) const;
+
+    bool IsConnected() const { return m_ClientPort != nullptr; }
 
 private:
 

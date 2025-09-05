@@ -57,9 +57,9 @@ void CommunicationPort::FinalizeFilterPort()
 // Rudimentary output message sender.
 NTSTATUS CommunicationPort::SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString, ...)
 {
-	NTSTATUS status = STATUS_INTERNAL_ERROR;
+	NTSTATUS status = STATUS_CONNECTION_INVALID;
 
-	if (m_ClientPort)
+	if (IsConnected())
 	{
 		va_list args;
 		va_start(args, formatString);
@@ -73,21 +73,97 @@ NTSTATUS CommunicationPort::SendOutputMessage(_In_ PortMessageType type, _In_ LP
 		{
 			msg->type = type;
 
-			UNICODE_STRING tmpString = { 0, COMMUNICATION_BUFFER_LEN - FIELD_OFFSET(PortMessage, data), reinterpret_cast<wchar_t*>(msg->data) };
+			UNICODE_STRING tmpString = { 0, 
+				COMMUNICATION_BUFFER_LEN - FIELD_OFFSET(PortMessage, stringMsg.data), 
+				reinterpret_cast<wchar_t*>(msg->stringMsg.data) };
 			if (NT_SUCCESS(status = RtlUnicodeStringVPrintf(&tmpString, formatString, args)))
 			{
-				msg->dataLenBytes = tmpString.Length;
+				msg->stringMsg.dataLenBytes = tmpString.Length;
 
 				// LARGE_INTEGER timeout;
 				// timeout.QuadPart = -10000 * 100; // 100 msec
 				status = FltSendMessage(m_Filter,
 					&m_ClientPort,
 					msg,
-					msg->dataLenBytes + FIELD_OFFSET(PortMessage, data),
+					sizeof(PortMessage) + msg->stringMsg.dataLenBytes,
 					nullptr,
 					nullptr,
 					nullptr);
 			}
+
+			ExFreePool(msg);
+		}
+		else
+		{
+			status = STATUS_NO_MEMORY;
+		}
+	}
+
+	return status;
+}
+
+NTSTATUS CommunicationPort::GetConnectedProcessHandle(HANDLE& Process) const
+{
+	Process = nullptr;
+    auto status = STATUS_CONNECTION_INVALID;
+
+    if (IsConnected())
+    {
+		 // Access type is kernel - this should always be permitted, according to MSDN
+		 status = ObOpenObjectByPointer(
+			m_ConnectedProcess,
+			OBJ_KERNEL_HANDLE,
+			NULL,
+			PROCESS_ALL_ACCESS,
+			*PsProcessType,
+			KernelMode,
+			&Process);
+    }
+    
+	return status;
+}
+
+NTSTATUS CommunicationPort::GetConnectedProcessObject(PEPROCESS& process) const
+{
+    process = nullptr;
+    auto status = STATUS_CONNECTION_INVALID;
+
+    if (IsConnected())
+    {
+        ObReferenceObject(m_ConnectedProcess);
+        process = m_ConnectedProcess;
+        status = STATUS_SUCCESS;
+    }
+    return status;
+}
+
+NTSTATUS CommunicationPort::SendSectionMessage(_In_ HANDLE SectionHandle, _In_ ULONG FileSizeBytes)
+{
+	NTSTATUS status = STATUS_CONNECTION_INVALID;
+
+	if (IsConnected())
+	{
+		auto msg = (PortMessage*)ExAllocatePool2(
+			POOL_FLAG_PAGED,
+			sizeof(PortMessage) + sizeof(HANDLE),
+			COMMUNINCATION_POOLTAG);
+
+		if (msg)
+		{
+			// POC hack - send the file size in the dataLenBytes buffer
+			msg->type = PortMessageType::SectionMessage;
+            msg->sectionMsg.fileSizeBytes = FileSizeBytes;
+			msg->sectionMsg.sectionHandle = SectionHandle;
+
+			// LARGE_INTEGER timeout;
+			// timeout.QuadPart = -10000 * 100; // 100 msec
+			status = FltSendMessage(m_Filter,
+				&m_ClientPort,
+				msg,
+				sizeof(PortMessage),
+				nullptr,
+				nullptr,
+				nullptr);
 
 			ExFreePool(msg);
 		}
@@ -112,9 +188,11 @@ NTSTATUS CommunicationPort::PortConnectNotify(
 	UNREFERENCED_PARAMETER(SizeOfContext);
 	
 	ConnectionPortCookie = nullptr;
-	Instance()->m_ClientPort = ClientPort;
-    Instance()->m_ConnectedProcess = PsGetCurrentProcess();
-    Instance()->m_ConnectedPID = HandleToUlong(PsGetCurrentProcessId());
+
+	CommunicationPort* instance = Instance();
+	instance->m_ClientPort = ClientPort;
+    instance->m_ConnectedProcess = PsGetCurrentProcess();
+    instance->m_ConnectedPID = HandleToUlong(PsGetCurrentProcessId());
 
 	return STATUS_SUCCESS;
 }
@@ -122,10 +200,13 @@ NTSTATUS CommunicationPort::PortConnectNotify(
 void CommunicationPort::PortDisconnectNotify(_In_opt_ PVOID ConnectionCookie) {
 	UNREFERENCED_PARAMETER(ConnectionCookie);
 
-	FltCloseClientPort(Instance()->m_Filter, &Instance()->m_ClientPort);
-	Instance()->m_ClientPort = {};
-	Instance()->m_ConnectedPID = {};
-	Instance()->m_ConnectedProcess = {};
+	CommunicationPort* instance = Instance();
+
+	FltCloseClientPort(instance->m_Filter, &instance->m_ClientPort);
+
+	instance->m_ClientPort = {};
+	instance->m_ConnectedPID = {};
+	instance->m_ConnectedProcess = {};
 }
 
 NTSTATUS CommunicationPort::PortMessageNotify(

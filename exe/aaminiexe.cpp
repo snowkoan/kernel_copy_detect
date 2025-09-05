@@ -9,6 +9,38 @@
 
 #pragma comment(lib, "fltlib")
 
+// https://gist.github.com/ccbrown/9722406
+void DumpHex(const void* data, size_t size) {
+	char ascii[17];
+	size_t i, j;
+	ascii[16] = '\0';
+	for (i = 0; i < size; ++i) {
+		printf("%02X ", ((unsigned char*)data)[i]);
+		if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
+			ascii[i % 16] = ((unsigned char*)data)[i];
+		}
+		else {
+			ascii[i % 16] = '.';
+		}
+		if ((i + 1) % 8 == 0 || i + 1 == size) {
+			printf(" ");
+			if ((i + 1) % 16 == 0) {
+				printf("|  %s \n", ascii);
+			}
+			else if (i + 1 == size) {
+				ascii[(i + 1) % 16] = '\0';
+				if ((i + 1) % 16 <= 8) {
+					printf(" ");
+				}
+				for (j = (i + 1) % 16; j < 16; ++j) {
+					printf("   ");
+				}
+				printf("|  %s \n", ascii);
+			}
+		}
+	}
+}
+
 void HandleMessage(const BYTE* buffer) {
 	auto msg = (PortMessage*)buffer;
 
@@ -17,9 +49,41 @@ void HandleMessage(const BYTE* buffer) {
 	case PortMessageType::VolumeMessage:
 	case PortMessageType::FileMessage:
 	{
-		std::wstring output_string(reinterpret_cast<wchar_t*>(msg->data), msg->dataLenBytes / sizeof(wchar_t));
+		std::wstring output_string(reinterpret_cast<wchar_t*>(msg->stringMsg.data), msg->stringMsg.dataLenBytes / sizeof(wchar_t));
         bool needsNewline = !output_string.empty() && output_string.back() != L'\n';
         wprintf(L"%s%s", output_string.c_str(), needsNewline ? L"\n" : L"");
+		break;
+	}
+	case PortMessageType::SectionMessage:
+	{
+		// Driver owns this handle - we do not call close.
+        wprintf(L"Received section handle - file size %d bytes, handle %u\n", 
+			msg->sectionMsg.fileSizeBytes,
+			HandleToUlong(msg->sectionMsg.sectionHandle));
+
+        // Map the section into our address space so we can look at it.
+        PBYTE data = reinterpret_cast<PBYTE>(MapViewOfFile(msg->sectionMsg.sectionHandle, FILE_MAP_READ, 0, 0, 0));
+		if (0 == data)
+		{
+            wprintf(L"Failed to map section into address space. Error %d\n", GetLastError());
+            break;
+        }
+
+        // Dump some of the data
+		constexpr ULONG maxBytesToPrint = 32;
+        DumpHex(data, min(msg->sectionMsg.fileSizeBytes, maxBytesToPrint));
+        // printBytes(data, min(msg->dataLenBytes, maxBytesToPrint));
+		if (msg->sectionMsg.fileSizeBytes > maxBytesToPrint)
+		{
+			wprintf(L"...\n");
+            
+			// We may end up printing some bytes twice. It's a POC.
+			ULONG initialOffset = msg->sectionMsg.fileSizeBytes - maxBytesToPrint;
+            DumpHex(data + initialOffset, maxBytesToPrint);
+		}
+
+		UnmapViewOfFile(data);
+
 		break;
 	}
 	default:

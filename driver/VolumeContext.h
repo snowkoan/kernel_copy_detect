@@ -7,9 +7,25 @@ public:
 	UNICODE_STRING volumeName = {};
     PFLT_VOLUME_PROPERTIES volumeProperties = {};
 	PFLT_INSTANCE fltInstance = {}; // We only ever attach once. What could go wrong?
+	NTSTATUS registerForDataScanStatus = {};
 
 	VolumeContext()
 	{
+	}
+
+	~VolumeContext()
+	{
+		if (volumeName.Buffer)
+		{
+			ExFreePoolWithTag(volumeName.Buffer, VOLUME_POOLTAG);
+			volumeName.Buffer = nullptr;
+		}
+
+		if (volumeProperties)
+		{
+			ExFreePoolWithTag(volumeProperties, VOLUME_POOLTAG);
+			volumeProperties = nullptr;
+		}
 
 	}
 
@@ -44,6 +60,8 @@ public:
         }
 
 		(*Context)->fltInstance = FltObjects->Instance;
+
+		(*Context)->registerForDataScanStatus = FltRegisterForDataScan(FltObjects->Instance);
         
 		return STATUS_SUCCESS;
     }
@@ -75,17 +93,7 @@ public:
         }
 
         auto ctx = reinterpret_cast<VolumeContext*>(Context);
-        if (ctx->volumeName.Buffer)
-        {
-            ExFreePoolWithTag(ctx->volumeName.Buffer, VOLUME_POOLTAG);
-            ctx->volumeName.Buffer = nullptr;
-        }
-
-		if (ctx->volumeProperties)
-		{
-			ExFreePoolWithTag(ctx->volumeProperties, VOLUME_POOLTAG);
-			ctx->volumeProperties = nullptr;
-		}
+		ctx->~VolumeContext();
 
         return;
     }
@@ -124,8 +132,6 @@ private:
 
 			// We expect STATUS_BUFFER_TOO_SMALL here. If it's another error, get out.
 			if (status != STATUS_BUFFER_TOO_SMALL) {
-				CommunicationPort::Instance()->SendOutputMessage(PortMessageType::VolumeMessage, 
-					L"FltGetVolumeName (first call) failed with unexpected status: 0x%X\n", status);
 				break;
 			}
 
@@ -141,8 +147,6 @@ private:
 				nullptr);
 
 			if (!NT_SUCCESS(status)) {
-				CommunicationPort::Instance()->SendOutputMessage(PortMessageType::VolumeMessage, 
-					L"FltGetVolumeName failed with status: 0x%X\n", status);
 				break;
 			}
 
