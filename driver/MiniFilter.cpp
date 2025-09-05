@@ -66,6 +66,107 @@ VOID MinifilterInstanceTeardownComplete(PCFLT_RELATED_OBJECTS FltObjects, FLT_IN
 	UNREFERENCED_PARAMETER(Flags);
 }
 
+NTSTATUS SendFileDataToUserMode(PFLT_FILTER Filter, PFLT_INSTANCE FltInstance, PFILE_OBJECT FileObject)
+{
+	NTSTATUS status = STATUS_SUCCESS;
+
+	SectionContext* sectionContext = {};
+	HANDLE hProcess = {};
+
+	do
+	{
+
+		if (!NT_SUCCESS(status = CommunicationPort::Instance()->GetConnectedProcessHandle(hProcess)))
+		{
+			// If we're not connected don't go any further.
+			break;
+		}
+
+		status = SectionContext::Factory(Filter,
+			hProcess, // SectionContext takes ownership of this handle
+			&sectionContext);
+
+		if (!NT_SUCCESS(status))
+		{
+			break;
+		}
+		hProcess = {};
+
+		OBJECT_ATTRIBUTES oa = {};
+		InitializeObjectAttributes(&oa,
+			NULL,
+			OBJ_CASE_INSENSITIVE, // user handle
+			NULL,
+			NULL);
+
+		LARGE_INTEGER sectionSize = {};
+		status = FltCreateSectionForDataScan(FltInstance,
+			FileObject,
+			sectionContext,
+			SECTION_MAP_READ,
+			&oa,
+			nullptr,
+			PAGE_READONLY,
+			SEC_COMMIT,
+			0,
+			&sectionContext->SectionHandle,
+			&sectionContext->SectionObject,
+			&sectionSize);
+
+		if (!NT_SUCCESS(status))
+		{
+			break;
+		}
+
+		// Bounds are good... 
+		if (sectionSize.QuadPart == 0 ||
+			sectionSize.QuadPart > (static_cast<ULONGLONG>(1024) * 1024 * 32))
+		{
+			break;
+		}
+
+		// Now we need the section handle in our process
+		HANDLE TargetProcessSectionHandle = {};
+		if (!NT_SUCCESS(status = ZwDuplicateObject(ZwCurrentProcess(),
+			sectionContext->SectionHandle,
+			sectionContext->TargetProcessHandle,
+			&TargetProcessSectionHandle,
+			0,
+			0,
+			DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES | DUPLICATE_CLOSE_SOURCE)))
+		{
+			break;
+		}
+
+		// We transferred ownership of the handle to the target process and closed the source
+		sectionContext->SectionHandle = TargetProcessSectionHandle;
+		sectionContext->SectionSize = static_cast<ULONG>(sectionSize.QuadPart);
+
+		CommunicationPort::Instance()->SendSectionMessage(sectionContext->SectionHandle,
+			sectionContext->SectionSize);
+
+	} while (false);
+
+	if (sectionContext)
+	{
+		if (sectionContext->IsSectionCreated())
+		{
+			FltCloseSectionForDataScan(sectionContext);
+		}
+		FltReleaseContext(sectionContext);
+		sectionContext = nullptr;
+	}
+
+	if (hProcess)
+	{
+		ZwClose(hProcess);
+		hProcess = nullptr;
+	}
+
+	return status;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data, 
 	_In_ PCFLT_RELATED_OBJECTS FltObjects, 
 	_In_opt_ PVOID, 
@@ -106,21 +207,29 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	// Ignore directories
 	// 
 	BOOLEAN dir = FALSE;
-	if (!NT_SUCCESS(FltIsDirectory(FltObjects->FileObject, FltObjects->Instance, &dir)))
+	if (!NT_SUCCESS(FltIsDirectory(FltObjects->FileObject, FltObjects->Instance, &dir)) || dir)
 	{
 		return FLT_POSTOP_FINISHED_PROCESSING;
 	}
 
-	if (dir) {
-		//
-		// not interesting
-		//
-		return FLT_POSTOP_FINISHED_PROCESSING;
-	}
-
+	//
 	// We only care about copying in this POC.
-	if (!DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject) &&
-		!DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject))
+	//
+	if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject))
+	{
+		if (0 == (desiredAccess & FILE_WRITE_DATA))
+		{
+			return FLT_POSTOP_FINISHED_PROCESSING;
+		}
+	}
+	else if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject))
+	{
+		if (0 == (desiredAccess & FILE_READ_DATA))
+		{
+			return FLT_POSTOP_FINISHED_PROCESSING;
+		}
+	}
+	else
 	{
 		return FLT_POSTOP_FINISHED_PROCESSING;
 	}
@@ -145,7 +254,7 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	//
 	if (!NT_SUCCESS(status = StreamHandleContext::SetContext(FltObjects, context, true)))
 	{
-		KdPrint(("Failed to set file context (0x%08X)\n", status));
+		KdPrint(("Failed to set SH context (0x%08X)\n", status));
 	}
 	else
 	{
@@ -154,9 +263,11 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 		p.GetImageFileNameOnly(processName);
 
 		CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
-			L"%wZ (%u,%u): Created SH context 0x%p for %wZ%ls%ls", 
+			L"%wZ (%u,%u): Created context SH=%p, FO=%p, %wZ%ls%ls", 
 			processName.Get(), HandleToUlong(PsGetCurrentProcessId()), HandleToUlong(PsGetCurrentThreadId()),
-			context, &fileNameInfo->Name,
+			context, 
+            FltObjects->FileObject,
+			&fileNameInfo->Name,
 			DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject) ? L"\n\tOpened with copy destination flag" : L"",
 			DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject) ? L"\n\tOpened with copy source flag" : L"");
 	}
@@ -169,6 +280,7 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
+_IRQL_requires_max_(APC_LEVEL)
 FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 	_Inout_ PFLT_CALLBACK_DATA Data,
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -180,9 +292,6 @@ FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 	StreamHandleContext* contextSrc = {};
 	StreamHandleContext* contextDest = {};
 	VolumeContext* volumeContext = {};
-	SectionContext* sectionContext = {};
-
-	HANDLE hProcess = {};
 
 	if (IoGetTopLevelIrp() != nullptr)
 	{
@@ -234,7 +343,9 @@ FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 			// This is always called in the SYSTEM process it seems.
 			CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
 				L"%wZ (%u, %u): Copy Notification (pos=%u, len=%u)\n\tDestination: %wZ (SH=%p)\n\tSource: %wZ",
-                &processName, HandleToULong(PsGetCurrentProcessId()), HandleToULong(PsGetCurrentThreadId()),
+                &processName, 
+				HandleToULong(PsGetCurrentProcessId()), 
+				HandleToULong(PsGetCurrentThreadId()),
 				Parameters.ByteOffset, Parameters.Length,
 				&destinationName->Name,
 				contextSrc,
@@ -254,75 +365,7 @@ FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 			// TODO: When testing on the network, I noticed multiple chunks being written in parallel.
 			// Look at locking and see if it is adequate to handle this.
 			//
-
-			if (!NT_SUCCESS(status = CommunicationPort::Instance()->GetConnectedProcessHandle(hProcess)))
-			{
-				// If we're not connected don't go any further.
-				break;
-			}
-
-			status = SectionContext::Factory(FltObjects,
-				hProcess, // SectionContext takes ownership of this handle
-				&sectionContext);
-
-			if (!NT_SUCCESS(status))
-			{
-				break;
-			}
-			hProcess = {};
-
-			OBJECT_ATTRIBUTES oa = {};
-			InitializeObjectAttributes(&oa,
-				NULL,
-				OBJ_CASE_INSENSITIVE, // user handle
-				NULL,
-				NULL);
-
-			LARGE_INTEGER sectionSize = {};
-			status = FltCreateSectionForDataScan(volumeContext->fltInstance,
-				copyInfo.SourceFileObject,
-				sectionContext,
-				SECTION_MAP_READ,
-				&oa,
-				nullptr,
-				PAGE_READONLY,
-				SEC_COMMIT,
-				0,
-				&sectionContext->SectionHandle,
-				&sectionContext->SectionObject,
-				&sectionSize);
-
-			if (!NT_SUCCESS(status))
-			{
-				break;
-			}
-
-			// Bounds are good... 
-			if (sectionSize.QuadPart == 0 ||
-				sectionSize.QuadPart > (static_cast<ULONGLONG>(1024) * 1024 * 32))
-			{
-				break;
-			}
-
-			// Now we need the section handle in our process
-			HANDLE TargetProcessSectionHandle = {};
-			if (!NT_SUCCESS(status = ZwDuplicateObject(ZwCurrentProcess(),
-				sectionContext->SectionHandle,
-				sectionContext->TargetProcessHandle,
-				&TargetProcessSectionHandle,
-				0,
-				0,
-				DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES | DUPLICATE_CLOSE_SOURCE)))
-			{
-				break;
-			}
-
-            // We transferred ownership of the handle to the target process and closed the source
-            sectionContext->SectionHandle = TargetProcessSectionHandle;
-            sectionContext->SectionSize = static_cast<ULONG>(sectionSize.QuadPart);
-				
-			CommunicationPort::Instance()->SendSectionMessage(sectionContext->SectionHandle,
-				sectionContext->SectionSize);
+            status = SendFileDataToUserMode(FltObjects->Filter, volumeContext->fltInstance, copyInfo.SourceFileObject);
 		}
 
 	} while (false);
@@ -341,20 +384,6 @@ FLT_PREOP_CALLBACK_STATUS OnPreWrite(
 	{
         FltReleaseContext(volumeContext);
 		volumeContext = nullptr;
-	}
-	if (sectionContext)
-	{
-		if (sectionContext->IsSectionCreated())
-		{
-			FltCloseSectionForDataScan(sectionContext);
-		}
-		FltReleaseContext(sectionContext);
-        sectionContext = nullptr;
-	}
-	if (hProcess)
-	{
-		ZwClose(hProcess);
-		hProcess = nullptr;
 	}
 
 	//
@@ -381,13 +410,16 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCleanup(_Inout_ PFLT_CALLBACK_DATA Data,
 		return FLT_POSTOP_FINISHED_PROCESSING;
 	}
 
-	// SendOutputMessage(PortMessageType::FileMessage, L"Cleaning up stream handle context 0x%p", context);
+	CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage, 
+		L"Cleaning up stream handle context 0x%p", context);
+
 	FltReleaseContext(context);
 	FltDeleteContext(context);
 
 	return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
 FLT_PREOP_CALLBACK_STATUS OnPreClose(
 	_Inout_ PFLT_CALLBACK_DATA Data,
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -499,7 +531,7 @@ NTSTATUS InitMiniFilter(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPat
 		FLT_REGISTRATION const reg = {
 			sizeof(FLT_REGISTRATION),
 			FLT_REGISTRATION_VERSION,
-			0,                       //  Flags
+			FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, //  Flags
 			context,                 //  Context
 			callbacks,               //  Operation callbacks
 			MinifilterUnload,                   //  MiniFilterUnload

@@ -41,13 +41,14 @@ public:
         return SectionHandle != nullptr;
     }
 
-    static NTSTATUS Factory(_In_ PCFLT_RELATED_OBJECTS FltObjects, 
+    static NTSTATUS Factory(
+        _In_ PFLT_FILTER Filter,
         _In_ HANDLE ProcessHandle,
         _Out_ SectionContext** Context)
     {
         *Context = nullptr;
 
-        auto status = FltAllocateContext(FltObjects->Filter,
+        auto status = FltAllocateContext(Filter,
             FLT_SECTION_CONTEXT, sizeof(SectionContext), NonPagedPool,
             (PFLT_CONTEXT*)Context);
 
