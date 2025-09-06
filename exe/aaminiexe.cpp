@@ -56,7 +56,7 @@ void HandleMessage(const BYTE* buffer) {
 	}
 	case PortMessageType::SectionMessage:
 	{
-		// Driver owns this handle - we do not call close.
+        // We received a section handle from the driver. We now own it.
         wprintf(L"Received section handle - file size %d bytes, handle %u\n", 
 			msg->sectionMsg.fileSizeBytes,
 			HandleToUlong(msg->sectionMsg.sectionHandle));
@@ -83,6 +83,7 @@ void HandleMessage(const BYTE* buffer) {
 		}
 
 		UnmapViewOfFile(data);
+		CloseHandle(msg->sectionMsg.sectionHandle);
 
 		break;
 	}

@@ -66,5 +66,8 @@
     <ClInclude Include="SectionContext.h">
       <Filter>Header Files\Contexts</Filter>
     </ClInclude>
+    <ClInclude Include="SourceFileList.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

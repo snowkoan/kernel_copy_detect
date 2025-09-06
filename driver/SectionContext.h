@@ -8,18 +8,25 @@ public:
     ULONG SectionSize = {};
 
     HANDLE TargetProcessHandle = {};
+    PEPROCESS TargetProcessObject = {}; // For closing the section handle later on
 
     // We take ownership of the handle, to prevent races.
-    SectionContext(HANDLE ProcessHandle)
+    SectionContext(HANDLE ProcessHandle, PEPROCESS ProcessObject)
     {
         TargetProcessHandle = ProcessHandle;
+        TargetProcessObject = ProcessObject;
     }
 
     ~SectionContext()
     {
         if (SectionHandle)
         {
-            ZwClose(SectionHandle);
+            // SectionHandle is in our user mode process handle table.
+            KAPC_STATE apcState;
+            KeStackAttachProcess(TargetProcessObject, &apcState);
+            // ZwClose does not like user mode handles in kernel. Verifier barfs.
+            ObCloseHandle(SectionHandle, UserMode);
+            KeUnstackDetachProcess(&apcState);
             SectionHandle = nullptr;
         }
 
@@ -34,16 +41,22 @@ public:
             ZwClose(TargetProcessHandle);
             TargetProcessHandle = nullptr;
         }
+
+        if (TargetProcessObject)
+        {
+            ObfDereferenceObject(TargetProcessObject);
+        }
     }
 
     bool IsSectionCreated() const
     {
-        return SectionHandle != nullptr;
+        return SectionObject != nullptr;
     }
 
     static NTSTATUS Factory(
         _In_ PFLT_FILTER Filter,
         _In_ HANDLE ProcessHandle,
+        _In_ PEPROCESS ProcessObject,
         _Out_ SectionContext** Context)
     {
         *Context = nullptr;
@@ -57,7 +70,7 @@ public:
         }
 
         // Placement new
-        new (*Context) SectionContext(ProcessHandle);
+        new (*Context) SectionContext(ProcessHandle, ProcessObject);
 
         return STATUS_SUCCESS;
     }

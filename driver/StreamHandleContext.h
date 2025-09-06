@@ -6,10 +6,15 @@ public:
     LARGE_INTEGER m_firstWriteTime = {};
     ULONGLONG m_writeCount = {};
     Mutex Lock;
+    bool AddedToSourceList = {};
 
     StreamHandleContext()
     {
         Lock.Init();
+    }
+
+    ~StreamHandleContext()
+    {
     }
 
     static NTSTATUS Factory(_In_ PCFLT_RELATED_OBJECTS FltObjects, _Out_ StreamHandleContext** Context)
@@ -57,7 +62,7 @@ public:
             return;
         }
         auto ctx = reinterpret_cast<StreamHandleContext*>(Context);
-        UNREFERENCED_PARAMETER(ctx);
+        ctx->~StreamHandleContext();
         return;
     }
 };

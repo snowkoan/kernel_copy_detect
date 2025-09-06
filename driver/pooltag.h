@@ -6,3 +6,4 @@
 #define STREAMHANDLE_POOLTAG 'hsAA'
 #define STREAM_POOLTAG 'tsAA'
 #define SECTION_POOLTAG 'csAA'
+#define SOURCEFILE_POOLTAG 'fsAA'
