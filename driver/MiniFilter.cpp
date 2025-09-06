@@ -262,6 +262,9 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 			return FLT_POSTOP_FINISHED_PROCESSING;
 		}
 
+		// The FO is being opened as a copy destination. This may or may not prove to be true.
+		// We don't know the source, but by observation, CopyFile opens it first so we should have it 
+		// in our list.
         PotentialSourceFileObject = g_SourceFileList->Find(HandleToUlong(PsGetCurrentProcessId()),
             HandleToUlong(PsGetCurrentThreadId()));
 	}
@@ -272,9 +275,8 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 			return FLT_POSTOP_FINISHED_PROCESSING;
 		}
 
-		// This may be used as a source file later. By observation, sometimes, Explorer opens the same
-		// file multiple times (seen on network). In that case, we'll have more than one entry in the list for
-		// this PID and TID. A better method might be to filter by fscontext.
+		// This FO is being opened as a copy source. This may or may not prove to be true.
+		// By observation, Explorer will sometimes open with this flag set and then close the file before copying anything.
         g_SourceFileList->AddFirst(HandleToUlong(PsGetCurrentProcessId()), 
 								   HandleToUlong(PsGetCurrentThreadId()), 
 								   FltObjects->FileObject);
@@ -324,6 +326,7 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 
 	if (PotentialSourceFileObject)
 	{
+		// We think we know the source that will be copied to the current FO. Let user mode know.
 		// We don't know the correct instance for this FO. It's OK.
 		status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject);
 	}
