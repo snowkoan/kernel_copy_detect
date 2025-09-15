@@ -13,7 +13,7 @@ Do not run this on your dev machine. It's kernel code of the POC variety. Here's
 1. Copy all binaries to a test VM with [test signing enabled](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option).
 2. To install, just create a service entry for the driver: `sc create copydetect type= kernel binPath="%cd%\aamini.sys" start= demand`
 3. Run `fltmc load copydetect`. This will set up the necessary minifilter registry values etc (thanks @zodiacon)
-4. Run `aaminiexe.exe` to see messages from the driver and to tell the driver to block certain copy operations. If you try to copy a file via Explorer, xcopy, robocopy, cmd copy, Powershell copy etc. and the first characters of the file are ASCII 'snowkoan-secret', the copy will be blocked.
+4. Run `aaminiexe.exe` to see messages from the driver and to tell the driver to block certain copy operations. If you try to copy a file via Explorer, xcopy, robocopy, cmd copy, Powershell copy etc. and the first characters of the file are ASCII `snowkoan-secret`, the copy will be blocked.
 
 ex:
 
