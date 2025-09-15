@@ -46,6 +46,7 @@ void DumpHex(const void* data, size_t size) {
 
 NTSTATUS HandleMessage(const BYTE* buffer, bool& reply) 
 {
+	static ULONG blockCount = 0;
 	auto msg = (PortMessage*)buffer;
 	auto status = STATUS_SUCCESS;
 	reply = false;
@@ -97,14 +98,16 @@ NTSTATUS HandleMessage(const BYTE* buffer, bool& reply)
 		{
 			if (0 == _strnicmp(reinterpret_cast<const char*>(data), secret, _countof(secret) - 1))
 			{
-				wprintf(L"Secret data detected! Not allowing copy.\n");
-				status = STATUS_ACCESS_DENIED;
+				ULONG currentBlockCount = InterlockedIncrement(&blockCount);
+				wprintf(L"Block #%u: Secret data detected! Not allowing copy.\n", currentBlockCount);
+				// status = STATUS_ACCESS_DENIED; // By observation, cmd.exe retries this 15 times!
+				status = STATUS_CONTENT_BLOCKED; // By observation, cmd.exe retries this 3 times.
 			}
 		}
 
         // Clean up
 		UnmapViewOfFile(data);
-		CloseHandle(msg->sectionMsg.sectionHandle);
+		 // CloseHandle(msg->sectionMsg.sectionHandle); Driver owns this
 
 		break;
 	}

@@ -167,8 +167,8 @@ NTSTATUS SendFileDataToUserMode(PFLT_INSTANCE FltInstance,
 			sectionContext->SectionSize,
 			UserReply)))
 		{
-			// User mode is responsible for closing the section handle now.
-            sectionContext->SectionHandle = nullptr;
+			// Driver owns the handle in all cases, since the call to UM is synchronous now.
+            // sectionContext->SectionHandle = nullptr;
 		}
 
 	} while (false);
@@ -209,6 +209,85 @@ NTSTATUS SendFileDataToUserMode(PFLT_INSTANCE FltInstance,
 	return status;
 }
 
+_IRQL_requires_max_(APC_LEVEL)
+FLT_PREOP_CALLBACK_STATUS OnPreCreate(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_Outptr_result_maybenull_ PVOID* CompletionContext)
+{
+	const ULONG desiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
+	*CompletionContext = nullptr;
+
+	// In pre-create, we can ignore some easy things.
+	// 
+	// We also want to detect copy intention here so that we can block before the 
+	// file is created.
+	if (IoGetTopLevelIrp() != nullptr ||
+		Data->RequestorMode == KernelMode)
+	{
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+	}
+
+	if (HandleToUlong(PsGetCurrentProcessId()) == CommunicationPort::Instance()->GetConnectedPID())
+	{
+		// Don't care about our own activity
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+	}
+
+	//
+	// Ignore attribute opens to save a *lot* of useless processing.
+	//
+	if (Data->IoStatus.Information == FILE_OPENED &&
+		((desiredAccess & ~(SYNCHRONIZE | FILE_READ_ATTRIBUTES)) == 0))
+	{
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+	}
+
+	if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject))
+	{
+		if (0 == (desiredAccess & FILE_WRITE_DATA))
+		{
+			return FLT_PREOP_SUCCESS_NO_CALLBACK;
+		}
+
+		// The FO is being opened as a copy destination. This may or may not prove to be true.
+		// We don't know the source, but by observation, CopyFile opens it first so we should have it 
+		// in our list.
+		PFILE_OBJECT PotentialSourceFileObject = g_SourceFileList->Find(HandleToUlong(PsGetCurrentProcessId()),
+			HandleToUlong(PsGetCurrentThreadId()));
+
+		if (PotentialSourceFileObject)
+		{
+			// We think we know the source that will be copied to the current FO. Let user mode know.
+			// We don't know the correct instance for this FO. It's OK.
+            NTSTATUS userResult = STATUS_SUCCESS;
+			auto status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject, userResult);
+
+			if (NT_SUCCESS(status) && !NT_SUCCESS(userResult))
+			{
+				UnicodeString processName;
+				Process p(PsGetCurrentProcess());
+				p.GetImageFileNameOnly(processName);
+
+				CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
+					L"%wZ (%u,%u): Blocking copy to %wZ with code 0x%x",
+					processName.Get(),
+                    HandleToUlong(PsGetCurrentProcessId()),
+                    HandleToUlong(PsGetCurrentThreadId()),
+                    &FilterFileNameInformation(Data).Get()->Name,
+					userResult);
+
+				// User has asked us to block this.
+				Data->IoStatus.Status = userResult;
+				Data->IoStatus.Information = 0;
+				return FLT_PREOP_COMPLETE;
+			}
+		}
+	}
+
+	return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+}
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data, 
 	_In_ PCFLT_RELATED_OBJECTS FltObjects, 
@@ -219,32 +298,12 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	UNREFERENCED_PARAMETER(disposition); // I always forget how to do this. Keep it around.
 
 	const ULONG desiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
-	PFILE_OBJECT PotentialSourceFileObject = {};
-
-	NTSTATUS postCreateResult = STATUS_SUCCESS;
 
 	// 
 	// Basic things to ignore 
 	//
-	if (Flags & FLTFL_POST_OPERATION_DRAINING || 
-		Data->IoStatus.Status != STATUS_SUCCESS || // handles STATUS_REPARSE as well
-		IoGetTopLevelIrp() != nullptr ||
-		Data->RequestorMode == KernelMode)
-	{
-		return FLT_POSTOP_FINISHED_PROCESSING;
-	}
-
-	if (HandleToUlong(PsGetCurrentProcessId()) == CommunicationPort::Instance()->GetConnectedPID())
-    {
-        // Don't care about our own activity
-        return FLT_POSTOP_FINISHED_PROCESSING;
-    }
-
-	//
-	// Ignore attribute opens to save a *lot* of useless processing.
-	//
-	if (Data->IoStatus.Information == FILE_OPENED && 
-		((desiredAccess & ~(SYNCHRONIZE | FILE_READ_ATTRIBUTES)) == 0))
+	if (Flags & FLTFL_POST_OPERATION_DRAINING ||
+		Data->IoStatus.Status != STATUS_SUCCESS) // handles STATUS_REPARSE as well
 	{
 		return FLT_POSTOP_FINISHED_PROCESSING;
 	}
@@ -259,22 +318,10 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	}
 
 	//
-	// We only care about copying in this POC.
+	// We only care about copying in this POC. We handled the destination in pre-create.
+	// Look for the source now.
 	//
-	if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject))
-	{
-		if (0 == (desiredAccess & FILE_WRITE_DATA))
-		{
-			return FLT_POSTOP_FINISHED_PROCESSING;
-		}
-
-		// The FO is being opened as a copy destination. This may or may not prove to be true.
-		// We don't know the source, but by observation, CopyFile opens it first so we should have it 
-		// in our list.
-        PotentialSourceFileObject = g_SourceFileList->Find(HandleToUlong(PsGetCurrentProcessId()),
-            HandleToUlong(PsGetCurrentThreadId()));
-	}
-	else if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject))
+	if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject))
 	{
 		if (0 == (desiredAccess & FILE_READ_DATA))
 		{
@@ -330,28 +377,15 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 			DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopySource(FltObjects->FileObject) ? L"\n\tOpened with copy source flag" : L"");
 	}
 
-	if (PotentialSourceFileObject)
-	{
-		// We think we know the source that will be copied to the current FO. Let user mode know.
-		// We don't know the correct instance for this FO. It's OK.
-		status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject, postCreateResult);
-	}
-
 	//
 	// release context in all cases
 	//
 	FltReleaseContext(context);
 
-	if (!NT_SUCCESS(postCreateResult))
-	{
-		// We were told to deny this open - if it was a CREATE or a destructive
-		// open, we're left with a 0-byte file. Not important for the POC, but 
-		// something to consider. We could avoid this by handling the whole thing in
-		// pre-create. We just have to be a bit more careful about the calls we make.
-		FltCancelFileOpen(FltObjects->Instance, FltObjects->FileObject);
-		Data->IoStatus.Status = postCreateResult;
-		Data->IoStatus.Information = 0;
-	}
+	// If one were to block here, we also need to cancel the open, since it already succeeded.
+	//FltCancelFileOpen(FltObjects->Instance, FltObjects->FileObject);
+	//Data->IoStatus.Status = postCreateResult;
+	//Data->IoStatus.Information = 0;	
 
 	return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -585,7 +619,7 @@ NTSTATUS InitMiniFilter(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPat
         hSubKey = nullptr;
 
 		FLT_OPERATION_REGISTRATION const callbacks[] = {
-			{ IRP_MJ_CREATE, 0, nullptr, OnPostCreate },
+			{ IRP_MJ_CREATE, 0, OnPreCreate, OnPostCreate },
 			{ IRP_MJ_WRITE, 0, OnPreWrite },
 			{ IRP_MJ_CLEANUP, 0, nullptr, OnPostCleanup },
 			{ IRP_MJ_CLOSE, 0, OnPreClose, nullptr },
