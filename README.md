@@ -18,7 +18,7 @@ Do not run this on your dev machine. It's kernel code of the POC variety. Here's
 ex:
 
 ```cmd.exe (2388,4844): Created context SH=FFFFBD066FCD6840, FO=FFFFBD0672C5FBD0, \Device\HarddiskVolume3\temp\test.txt
-        Opened with copy source flag
+Opened with copy source flag
 Received section handle - file size 18 bytes, handle 200
 73 6E 6F 77 6B 6F 61 6E  2D 73 65 63 72 65 74 20  |  snowkoan-secret
 0D 0A                                             |  ..
