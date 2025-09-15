@@ -71,9 +71,12 @@ VOID MinifilterInstanceTeardownComplete(PCFLT_RELATED_OBJECTS FltObjects, FLT_IN
 }
 
 // If FltInstance is NULL, we find it ourselves. Thanks for nothing, buddy.
-NTSTATUS SendFileDataToUserMode(PFLT_INSTANCE FltInstance, PFILE_OBJECT FileObject)
+NTSTATUS SendFileDataToUserMode(PFLT_INSTANCE FltInstance, 
+	PFILE_OBJECT FileObject,
+	NTSTATUS& UserReply)
 {
 	NTSTATUS status = STATUS_SUCCESS;
+	UserReply = STATUS_SUCCESS;
 
 	SectionContext* sectionContext = {};
 	VolumeContext* volumeContext = {};
@@ -161,7 +164,8 @@ NTSTATUS SendFileDataToUserMode(PFLT_INSTANCE FltInstance, PFILE_OBJECT FileObje
 		}
 
 		if (NT_SUCCESS(status = CommunicationPort::Instance()->SendSectionMessage(sectionContext->SectionHandle,
-			sectionContext->SectionSize)))
+			sectionContext->SectionSize,
+			UserReply)))
 		{
 			// User mode is responsible for closing the section handle now.
             sectionContext->SectionHandle = nullptr;
@@ -217,11 +221,13 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	const ULONG desiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
 	PFILE_OBJECT PotentialSourceFileObject = {};
 
+	NTSTATUS postCreateResult = STATUS_SUCCESS;
+
 	// 
 	// Basic things to ignore 
 	//
 	if (Flags & FLTFL_POST_OPERATION_DRAINING || 
-		Data->IoStatus.Status != STATUS_SUCCESS ||
+		Data->IoStatus.Status != STATUS_SUCCESS || // handles STATUS_REPARSE as well
 		IoGetTopLevelIrp() != nullptr ||
 		Data->RequestorMode == KernelMode)
 	{
@@ -328,13 +334,24 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 	{
 		// We think we know the source that will be copied to the current FO. Let user mode know.
 		// We don't know the correct instance for this FO. It's OK.
-		status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject);
+		status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject, postCreateResult);
 	}
 
 	//
 	// release context in all cases
 	//
 	FltReleaseContext(context);
+
+	if (!NT_SUCCESS(postCreateResult))
+	{
+		// We were told to deny this open - if it was a CREATE or a destructive
+		// open, we're left with a 0-byte file. Not important for the POC, but 
+		// something to consider. We could avoid this by handling the whole thing in
+		// pre-create. We just have to be a bit more careful about the calls we make.
+		FltCancelFileOpen(FltObjects->Instance, FltObjects->FileObject);
+		Data->IoStatus.Status = postCreateResult;
+		Data->IoStatus.Information = 0;
+	}
 
 	return FLT_POSTOP_FINISHED_PROCESSING;
 }

@@ -33,7 +33,9 @@ public:
 		_Out_ PULONG ReturnOutputBufferLength);
 
 	NTSTATUS SendOutputMessage(_In_ PortMessageType type, _In_ LPCWSTR formatString, ...);
-	NTSTATUS SendSectionMessage(_In_ HANDLE Sectionhandle, _In_ ULONG FileSizeBytes);
+	NTSTATUS SendSectionMessage(_In_ HANDLE Sectionhandle, 
+		_In_ ULONG FileSizeBytes,
+		_Out_ NTSTATUS& UserReply);
 
     ULONG GetConnectedPID() const { return m_ConnectedPID; }
 

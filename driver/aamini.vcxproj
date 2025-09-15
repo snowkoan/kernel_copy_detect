@@ -146,6 +146,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Common.h" />
     <ClInclude Include="Communication.h" />
     <ClInclude Include="Driver.h" />
     <ClInclude Include="FileContext.h" />

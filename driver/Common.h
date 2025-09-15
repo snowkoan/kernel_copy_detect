@@ -28,6 +28,16 @@ struct PortMessage {
 	};
 };
 
+struct PortReply {
+	NTSTATUS status;
+};
+
+struct PortReplyMessage {
+	FILTER_REPLY_HEADER header;
+	PortReply reply;
+};
+
 #define FILTER_PORT_NAME L"\\CopyDetectPort"
 
 constexpr ULONG COMMUNICATION_BUFFER_LEN = 1 << 15; // 32 KB
+constexpr ULONG PortReplyMessageSize = sizeof(FILTER_REPLY_HEADER) + sizeof(PortReply);

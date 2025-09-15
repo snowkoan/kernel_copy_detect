@@ -1,7 +1,10 @@
 // This file contains the 'main' function. Program execution begins and ends there.
 //
 
+#define WIN32_NO_STATUS // Avoid name clash in ntstatus.h
 #include <Windows.h>
+#undef WIN32_NO_STATUS
+#include <ntstatus.h>
 #include <fltUser.h>
 #include <stdio.h>
 #include <string>
@@ -41,8 +44,11 @@ void DumpHex(const void* data, size_t size) {
 	}
 }
 
-void HandleMessage(const BYTE* buffer) {
+NTSTATUS HandleMessage(const BYTE* buffer, bool& reply) 
+{
 	auto msg = (PortMessage*)buffer;
+	auto status = STATUS_SUCCESS;
+	reply = false;
 
 	switch (msg->type)
 	{
@@ -56,32 +62,47 @@ void HandleMessage(const BYTE* buffer) {
 	}
 	case PortMessageType::SectionMessage:
 	{
-        // We received a section handle from the driver. We now own it.
-        wprintf(L"Received section handle - file size %d bytes, handle %u\n", 
+		// Always reply to the message
+		reply = true;
+
+		// We received a section handle from the driver. We now own it.
+		wprintf(L"Received section handle - file size %d bytes, handle %u\n",
 			msg->sectionMsg.fileSizeBytes,
 			HandleToUlong(msg->sectionMsg.sectionHandle));
 
-        // Map the section into our address space so we can look at it.
-        PBYTE data = reinterpret_cast<PBYTE>(MapViewOfFile(msg->sectionMsg.sectionHandle, FILE_MAP_READ, 0, 0, 0));
+		// Map the section into our address space so we can look at it.
+		PBYTE data = reinterpret_cast<PBYTE>(MapViewOfFile(msg->sectionMsg.sectionHandle, FILE_MAP_READ, 0, 0, 0));
 		if (0 == data)
 		{
-            wprintf(L"Failed to map section into address space. Error %d\n", GetLastError());
-            break;
-        }
+			wprintf(L"Failed to map section into address space. Error %d\n", GetLastError());
+			break;
+		}
 
-        // Dump some of the data
+		// Dump some of the data
 		constexpr ULONG maxBytesToPrint = 32;
-        DumpHex(data, min(msg->sectionMsg.fileSizeBytes, maxBytesToPrint));
-        // printBytes(data, min(msg->dataLenBytes, maxBytesToPrint));
+		DumpHex(data, min(msg->sectionMsg.fileSizeBytes, maxBytesToPrint));
+		// printBytes(data, min(msg->dataLenBytes, maxBytesToPrint));
 		if (msg->sectionMsg.fileSizeBytes > maxBytesToPrint)
 		{
 			wprintf(L"...\n");
-            
+
 			// We may end up printing some bytes twice. It's a POC.
 			ULONG initialOffset = msg->sectionMsg.fileSizeBytes - maxBytesToPrint;
-            DumpHex(data + initialOffset, maxBytesToPrint);
+			DumpHex(data + initialOffset, maxBytesToPrint);
 		}
 
+		// Don't let anyone copy our secret data!
+		constexpr char secret[] = "snowkoan-secret";
+		if (msg->sectionMsg.fileSizeBytes >= _countof(secret) - 1)
+		{
+			if (0 == _strnicmp(reinterpret_cast<const char*>(data), secret, _countof(secret) - 1))
+			{
+				wprintf(L"Secret data detected! Not allowing copy.\n");
+				status = STATUS_ACCESS_DENIED;
+			}
+		}
+
+        // Clean up
 		UnmapViewOfFile(data);
 		CloseHandle(msg->sectionMsg.sectionHandle);
 
@@ -93,6 +114,8 @@ void HandleMessage(const BYTE* buffer) {
 		break;
 	}
 	}
+
+	return status;
 }
 
 int main() 
@@ -118,7 +141,26 @@ int main()
 			break;
 		}
 
-		HandleMessage(buffer + sizeof(FILTER_MESSAGE_HEADER));
+		bool reply = false;
+		auto status = HandleMessage(buffer + sizeof(FILTER_MESSAGE_HEADER), reply);
+
+		if (reply)
+		{
+			PortReplyMessage replyMsg = {};		
+			replyMsg.header.Status = STATUS_SUCCESS;
+			replyMsg.header.MessageId = message->MessageId;
+			replyMsg.reply.status = status;
+
+			hr = FilterReplyMessage(hPort,
+				reinterpret_cast<PFILTER_REPLY_HEADER>(&replyMsg),
+				PortReplyMessageSize);
+
+            if (FAILED(hr))
+            {
+                wprintf(L"Error replying to message (0x%08X)\n", hr);
+                break;
+            }
+		}
 	}
 
 	CloseHandle(hPort);

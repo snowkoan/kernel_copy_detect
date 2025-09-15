@@ -137,9 +137,12 @@ NTSTATUS CommunicationPort::GetConnectedProcessObject(PEPROCESS& process) const
     return status;
 }
 
-NTSTATUS CommunicationPort::SendSectionMessage(_In_ HANDLE SectionHandle, _In_ ULONG FileSizeBytes)
+NTSTATUS CommunicationPort::SendSectionMessage(_In_ HANDLE SectionHandle, 
+	_In_ ULONG FileSizeBytes,
+	_Out_ NTSTATUS& userReply)
 {
 	NTSTATUS status = STATUS_CONNECTION_INVALID;
+	userReply = STATUS_SUCCESS;
 
 	if (IsConnected())
 	{
@@ -155,17 +158,25 @@ NTSTATUS CommunicationPort::SendSectionMessage(_In_ HANDLE SectionHandle, _In_ U
             msg->sectionMsg.fileSizeBytes = FileSizeBytes;
 			msg->sectionMsg.sectionHandle = SectionHandle;
 
+			PortReply reply = {};
+            ULONG replyLength = sizeof(reply);
+
 			// LARGE_INTEGER timeout;
 			// timeout.QuadPart = -10000 * 100; // 100 msec
 			status = FltSendMessage(m_Filter,
 				&m_ClientPort,
 				msg,
 				sizeof(PortMessage),
-				nullptr,
-				nullptr,
+				&reply,
+				&replyLength,
 				nullptr);
 
 			ExFreePool(msg);
+
+			if (NT_SUCCESS(status))
+			{
+				userReply = reply.status;
+			}
 		}
 		else
 		{
