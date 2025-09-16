@@ -209,7 +209,7 @@ NTSTATUS SendFileDataToUserMode(PFLT_INSTANCE FltInstance,
 	return status;
 }
 
-_IRQL_requires_max_(APC_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 FLT_PREOP_CALLBACK_STATUS OnPreCreate(
 	_Inout_ PFLT_CALLBACK_DATA Data,
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -253,22 +253,64 @@ FLT_PREOP_CALLBACK_STATUS OnPreCreate(
 		// The FO is being opened as a copy destination. This may or may not prove to be true.
 		// We don't know the source, but by observation, CopyFile opens it first so we should have it 
 		// in our list.
-		PFILE_OBJECT PotentialSourceFileObject = g_SourceFileList->Find(HandleToUlong(PsGetCurrentProcessId()),
-			HandleToUlong(PsGetCurrentThreadId()));
+		PFILE_OBJECT PotentialSourceFileObject = {};
+		NTSTATUS PreviousVerdict = STATUS_PENDING; // no verdict
 
-		if (PotentialSourceFileObject)
+		// We need to deref the FO when done.
+		auto status = g_SourceFileList->Find(HandleToUlong(PsGetCurrentThreadId()),
+			PotentialSourceFileObject, PreviousVerdict);
+
+		if (NT_SUCCESS(status))
 		{
 			// We think we know the source that will be copied to the current FO. Let user mode know.
 			// We don't know the correct instance for this FO. It's OK.
-            NTSTATUS userResult = STATUS_SUCCESS;
-			auto status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject, userResult);
+			NTSTATUS userResult = {};
+
+			UnicodeString processName;
+			Process p(PsGetCurrentProcess());
+			p.GetImageFileNameOnly(processName);
+
+            if (PreviousVerdict != STATUS_PENDING)
+            {
+				userResult = PreviousVerdict;
+
+				CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
+					L"%wZ (%u,%u): Using cached verdict 0x%x for source file %wZ",
+					processName.Get(),
+					HandleToUlong(PsGetCurrentProcessId()),
+					HandleToUlong(PsGetCurrentThreadId()),
+					userResult,
+					&FilterFileNameInformation(Data).Get()->Name);
+
+				status = STATUS_SUCCESS;
+            }
+			else
+			{
+				status = SendFileDataToUserMode(nullptr, PotentialSourceFileObject, userResult);
+
+				if (NT_SUCCESS(status))
+				{
+					status = g_SourceFileList->UpdateVerdict(HandleToUlong(PsGetCurrentThreadId()),
+						PotentialSourceFileObject,
+						userResult);
+
+					CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
+						L"%wZ (%u,%u): Caching verdict 0x%x for source file %wZ. Result: 0x%x",
+						processName.Get(),
+						HandleToUlong(PsGetCurrentProcessId()),
+						HandleToUlong(PsGetCurrentThreadId()),
+						userResult,
+						&FilterFileNameInformation(Data).Get()->Name,
+						status);
+
+				}
+			}
+
+			// We're done with the file object
+			ObDereferenceObject(PotentialSourceFileObject);
 
 			if (NT_SUCCESS(status) && !NT_SUCCESS(userResult))
 			{
-				UnicodeString processName;
-				Process p(PsGetCurrentProcess());
-				p.GetImageFileNameOnly(processName);
-
 				CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
 					L"%wZ (%u,%u): Blocking copy to %wZ with code 0x%x",
 					processName.Get(),
@@ -368,9 +410,8 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 		p.GetImageFileNameOnly(processName);
 
 		CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
-			L"%wZ (%u,%u): Created context SH=%p, FO=%p, %wZ%ls%ls", 
+			L"%wZ (%u,%u): Created context FO=%p, %wZ%ls%ls", 
 			processName.Get(), HandleToUlong(PsGetCurrentProcessId()), HandleToUlong(PsGetCurrentThreadId()),
-			context, 
             FltObjects->FileObject,
 			&fileNameInfo->Name,
 			DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject) ? L"\n\tOpened with copy destination flag" : L"",
@@ -513,10 +554,9 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCleanup(_Inout_ PFLT_CALLBACK_DATA Data,
 	}
 
 	CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage, 
-		L"Cleaning up stream handle context 0x%p", context);
+		L"Cleaning up file object 0x%p", FltObjects->FileObject);
 
 	FltReleaseContext(context);
-	FltDeleteContext(context);
 
 	return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -529,7 +569,23 @@ FLT_PREOP_CALLBACK_STATUS OnPreClose(
 {
 	UNREFERENCED_PARAMETER(Data);
 	UNREFERENCED_PARAMETER(FltObjects);
-	*CompletionContext = nullptr;	
+	*CompletionContext = nullptr;
+
+	StreamHandleContext* context;
+
+	auto status = FltGetStreamHandleContext(FltObjects->Instance, FltObjects->FileObject, (PFLT_CONTEXT*)&context);
+	if (!NT_SUCCESS(status) || context == nullptr) {
+		//
+		// no context, continue normally
+		//
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+	}
+
+	CommunicationPort::Instance()->SendOutputMessage(PortMessageType::FileMessage,
+		L"Closing file object 0x%p", FltObjects->FileObject);
+
+	FltDeleteContext(context);
+	FltReleaseContext(context);
 
 	return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }

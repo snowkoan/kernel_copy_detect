@@ -12,6 +12,8 @@
 
 #pragma comment(lib, "fltlib")
 
+ULONG g_TimeoutSeconds;
+
 // https://gist.github.com/ccbrown/9722406
 void DumpHex(const void* data, size_t size) {
 	char ascii[17];
@@ -92,6 +94,13 @@ NTSTATUS HandleMessage(const BYTE* buffer, bool& reply)
 			DumpHex(data + initialOffset, maxBytesToPrint);
 		}
 
+		if (g_TimeoutSeconds > 0)
+		{
+			// Simulate potential scanning delay
+			wprintf(L"Scan will take %u seconds\n", g_TimeoutSeconds);
+			Sleep(g_TimeoutSeconds * 1000);
+		}
+
 		// Don't let anyone copy our secret data!
 		constexpr char secret[] = "snowkoan-secret";
 		if (msg->sectionMsg.fileSizeBytes >= _countof(secret) - 1)
@@ -121,8 +130,20 @@ NTSTATUS HandleMessage(const BYTE* buffer, bool& reply)
 	return status;
 }
 
-int main() 
+int wmain(const int argc, const wchar_t* argv[]) 
 {
+	for (int i = 1; i < argc - 1; ++i) 
+	{
+		if (0 == _wcsicmp(argv[i], L"-t") && 
+			argc > i + 1)
+		{
+			i++;
+			g_TimeoutSeconds = _wtoi(argv[i]);
+			wprintf(L"Setting timeout to %u seconds (%ls)\n", g_TimeoutSeconds, argv[i]);
+		}
+	}
+
+
 	HANDLE hPort;
 	auto hr = FilterConnectCommunicationPort(FILTER_PORT_NAME, 0, nullptr, 0, nullptr, &hPort);
 	if (FAILED(hr)) 
