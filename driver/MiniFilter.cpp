@@ -738,10 +738,11 @@ NTSTATUS MinifilterUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
 	UNREFERENCED_PARAMETER(Flags);
 
-
-	delete g_SourceFileList;
 	CommunicationPort::Instance()->FinalizeFilterPort();
 	FltUnregisterFilter(g_Filter);
+
+	// Do this after we unregister the filter
+	delete g_SourceFileList;
 
 	return STATUS_SUCCESS;
 }

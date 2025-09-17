@@ -182,8 +182,8 @@ int wmain(const int argc, const wchar_t* argv[])
             if (FAILED(hr))
             {
                 wprintf(L"Error replying to message (0x%08X)\n", hr);
-                break;
-            }
+				continue; // not fatal
+            } 
 		}
 	}
 

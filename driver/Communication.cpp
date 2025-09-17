@@ -80,8 +80,6 @@ NTSTATUS CommunicationPort::SendOutputMessage(_In_ PortMessageType type, _In_ LP
 			{
 				msg->stringMsg.dataLenBytes = tmpString.Length;
 
-				// LARGE_INTEGER timeout;
-				// timeout.QuadPart = -10000 * 100; // 100 msec
 				status = FltSendMessage(m_Filter,
 					&m_ClientPort,
 					msg,
@@ -161,15 +159,16 @@ NTSTATUS CommunicationPort::SendSectionMessage(_In_ HANDLE SectionHandle,
 			PortReply reply = {};
             ULONG replyLength = sizeof(reply);
 
-			// LARGE_INTEGER timeout;
-			// timeout.QuadPart = -10000 * 100; // 100 msec
+			LARGE_INTEGER timeout;
+			timeout.QuadPart = -10000 * 1000 * 10; // 10 seconds
+
 			status = FltSendMessage(m_Filter,
 				&m_ClientPort,
 				msg,
 				sizeof(PortMessage),
 				&reply,
 				&replyLength,
-				nullptr);
+				&timeout);
 
 			ExFreePool(msg);
 
