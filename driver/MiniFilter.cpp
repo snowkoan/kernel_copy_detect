@@ -376,6 +376,15 @@ FLT_POSTOP_CALLBACK_STATUS OnPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
 								   HandleToUlong(PsGetCurrentThreadId()), 
 								   FltObjects->FileObject);
 	}
+	else if (DynamicImports::Instance()->IoCheckFileObjectOpenedAsCopyDestination(FltObjects->FileObject))
+	{
+		if (0 == (desiredAccess & FILE_WRITE_DATA))
+		{
+			return FLT_POSTOP_FINISHED_PROCESSING;
+		}
+
+		// Otherwise, continue on and assign a SH context.
+	}
 	else
 	{
 		return FLT_POSTOP_FINISHED_PROCESSING;
